@@ -1,5 +1,11 @@
 # Book Extraction AI
 
+
+
+https://github.com/user-attachments/assets/ae8a88ca-c96f-40b5-ab89-052d19469359
+
+
+
 An AI pipeline that extracts text from a book's opening pages given only a photo of its cover. The system identifies the book, determines its genre, retrieves the full text from a digital archive, and uses chain-of-thought reasoning to locate and return the correct content page.
 
 **Input**: Photo of a book cover
