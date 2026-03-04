@@ -168,8 +168,5 @@ curl -X POST http://localhost:3000/api/extract -F "image=@cover.jpg"
 
 ## What I'd Do Next
 
-- **Caching**: Redis layer for Google Books + Internet Archive lookups (most books are looked up repeatedly)
 - **Confidence routing**: Low-confidence identifications → ask user to confirm before proceeding
-- **Streaming**: Stream extraction step progress to the frontend via SSE
 - **Observability**: Token usage tracking per step, latency percentiles, success/failure rates
-- **Fallback chain**: Google Books → OpenLibrary → Internet Archive metadata for better coverage
