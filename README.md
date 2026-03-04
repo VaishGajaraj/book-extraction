@@ -1,423 +1,169 @@
-# 📚 Book Extraction AI
+# Book Extraction AI
 
-An AI-powered pipeline that extracts text from book pages using only a photo of the book cover.
+An AI pipeline that extracts text from a book's opening pages given only a photo of its cover. The system identifies the book, determines its genre, retrieves the full text from a digital archive, and uses chain-of-thought reasoning to locate and return the correct content page.
 
-## 🎯 The Challenge
+**Input**: Photo of a book cover
+**Output**: Page 1 text (non-fiction) or page 2 text (fiction)
 
-**Input**: A photo of a book cover
-**Output**: Text from the first pages of the book (page 1 for non-fiction, page 2 for fiction)
+## Architecture
 
-The creative constraint: Users don't provide the actual book pages—just the cover. The system must intelligently retrieve the book text and extract the correct page.
-
-## 🧠 AI Engineering Approach
-
-This project demonstrates advanced AI engineering competencies:
-
-### 1. **Multi-Model Orchestration**
-- **Claude Vision** (Sonnet 4.5) for image validation and book identification
-- **Claude Text** (Sonnet 4.5) for intelligent page extraction using chain-of-thought reasoning
-- **Claude Haiku** for fast, accurate fiction/non-fiction classification
-- **Google Books API** for book metadata and categories
-- **Internet Archive** for accessing digitized book text (OCR)
-- Strategic model selection based on task requirements
-
-### 2. **Sophisticated Prompt Engineering**
-
-**Structured Output Prompting** (Book Identification):
-```typescript
-// Explicit JSON schema + confidence scoring
-{
-  "title": string,     // Full title exactly as shown
-  "author": string,    // Primary author name
-  "isbn": string|null, // ISBN if visible
-  "confidence": string // "high"|"medium"|"low"
-}
-```
-
-**Chain-of-Thought Reasoning** (Page Extraction):
-```
-THINK STEP-BY-STEP:
-1. Identify front matter (title page, copyright, TOC...)
-2. Find where main content begins (Chapter 1, Introduction...)
-3. Extract the target page of actual content
-4. Verify substantial text, not just headings
-```
-
-**Role-Based Prompting** (Validation):
-```
-You are a book cover validator for an AI system.
-Task: Determine if this is a clear, readable book cover...
-```
-
-### 3. **Production-Ready AI Integration**
-- **Defensive parsing**: Multiple fallback strategies for AI outputs
-- **Confidence scoring**: AI self-assesses certainty
-- **Type validation**: Ensures outputs match expected schema
-- **Error handling**: Graceful degradation at each step
-- **Output validation**: Word count checks, format verification
-- **Safe content access**: Typed helper to extract text from Claude responses
-
-### 4. **Creative Problem Solving**
-
-**The Google Books + Internet Archive Solution**:
-- Google Books provides metadata and categories (free, no auth)
-- Claude Haiku classifies fiction/non-fiction from categories + book knowledge
-- Internet Archive provides full OCR text for 40M+ books (free, no auth)
-- Three APIs working together for complete coverage
-
-**Why this approach is clever**:
-1. Claude Vision reads unstructured cover images → structured data
-2. Google Books provides structured metadata → Claude Haiku classifies genre
-3. Internet Archive provides legal, free access to millions of books
-4. Claude Text intelligently identifies "content page 1" vs "page 1" (skips front matter)
-5. End-to-end AI orchestration with minimal code
-
-## 🏗️ Architecture
+The pipeline orchestrates three Claude models and two external APIs across four steps:
 
 ```
-┌─────────────────┐
-│  Upload Image   │
-└────────┬────────┘
-         │
-         ▼
-┌─────────────────────────────────┐
-│  1. Validate (Claude Vision)    │  ← "Is this a clear book cover?"
-│     Structured output: YES/NO    │
-└────────┬────────────────────────┘
-         │
-         ▼
-┌─────────────────────────────────┐
-│  2. Identify (Claude Vision)    │  ← Extract title, author, ISBN
-│     JSON schema enforcement      │     + confidence scoring
-└────────┬────────────────────────┘
-         │
-         ▼
-┌─────────────────────────────────┐
-│  3. Metadata (Google Books)     │  ← Get categories, metadata
-│     + Classify (Claude Haiku)   │     Fiction vs Non-Fiction
-└────────┬────────────────────────┘
-         │
-         ▼
-┌─────────────────────────────────┐
-│  4. Extract (Claude Text)       │  ← Chain-of-thought reasoning
-│     Internet Archive OCR text    │     Find page 1 or 2 of content
-└────────┬────────────────────────┘
-         │
-         ▼
-┌─────────────────┐
-│  Return Text    │
-└─────────────────┘
+  Upload Image
+       │
+       ▼
+  1. Validate (Claude Sonnet 4.5 Vision)
+     Role-based prompt → structured YES/NO verdict
+       │
+       ▼
+  2. Identify (Claude Sonnet 4.5 Vision)
+     JSON schema enforcement → title, author, ISBN, confidence
+       │
+       ▼
+  3. Classify (Google Books API + Claude Haiku)
+     Metadata lookup → AI genre classification → fiction/non-fiction
+       │
+       ▼
+  4. Extract (Internet Archive + Claude Sonnet 4.5 Text)
+     Fetch OCR text → chain-of-thought page extraction
+       │
+       ▼
+  Return page text + metadata + reasoning
 ```
 
-## 🚀 Quick Start
+**Model routing**: Sonnet 4.5 handles vision and complex text reasoning. Haiku handles classification at ~$0.0002/call. This keeps the expensive model where it matters and the cheap model where speed and cost matter.
 
-### Prerequisites
-- Node.js 18+
-- Anthropic API key ([get one here](https://console.anthropic.com))
+## Key Engineering Decisions
 
-### Installation
+### Prompt Engineering
+
+Each step uses a different prompting strategy matched to the task:
+
+**Structured output** (identification) — JSON schema in the prompt with confidence self-assessment. Defensive multi-layer parsing handles responses wrapped in markdown, preamble text, or malformed JSON.
+
+**Chain-of-thought** (extraction) — Step-by-step reasoning to distinguish front matter from content pages. The model explains its logic before extracting, which significantly improves accuracy on edge cases like books with long forewords or unusual structures.
+
+**Role-based** (validation) — Assigns the model a specific validator role with explicit accept/reject criteria. Generates user-facing error messages directly.
+
+### Genre Classification with Claude Haiku
+
+Replaced a regex-based classifier (`/fiction|novel|mystery|thriller/i`) with a Claude Haiku call. The regex missed horror, drama, satire, literary fiction, young adult, and dystopian genres. Haiku handles all of these correctly and can classify books even when Google Books returns no categories — it already knows most published books.
+
+### The `---` Delimiter Fix
+
+The page extraction prompt uses `REASONING: ... --- PAGE_TEXT: ...` as output format. The original implementation split on `---`, which corrupted fiction text containing scene break markers (extremely common). Fixed by using `indexOf` to find only the first delimiter.
+
+### Safe Response Access
+
+All Claude API responses go through a typed `extractTextContent()` helper instead of raw `response.content[0].text`. This prevents runtime crashes on unexpected response shapes (e.g., tool-use blocks, empty content arrays).
+
+### Shared Pipeline
+
+Both the Express API and CLI call the same `runPipeline()` function. A custom `PipelineValidationError` class lets the server distinguish 400 (bad input) from 500 (internal failure) without duplicating orchestration logic.
+
+## Running Locally
 
 ```bash
-# Clone the repository
-cd book-extraction-ai
-
-# Install dependencies
 npm install
-
-# Set up environment variables
 cp .env.example .env
-# Edit .env and add your ANTHROPIC_API_KEY
+# Add your ANTHROPIC_API_KEY to .env
 
-# Start development server
+# Unit tests (no API key needed)
+npm run eval
+
+# Full pipeline on test images
+npm run integration
+
+# Single image
+npm run cli -- ./images/fiction.jpg
+
+# Web UI
 npm run dev
+# Open http://localhost:3000
 ```
 
-Visit `http://localhost:3000` and upload a book cover!
+### Test Images
 
-### Testing with Example Books
+| Image | Book | Expected Genre | Expected Page |
+|-------|------|---------------|---------------|
+| `images/fiction.jpg` | The Casebook of Sherlock Holmes — Arthur Conan Doyle | Fiction | 2 |
+| `images/nonfiction.jpg` | Forensics — Val McDermid | Non-Fiction | 1 |
 
-**Fiction** (should return page 2):
-- The Great Gatsby by F. Scott Fitzgerald
-- Pride and Prejudice by Jane Austen
-- 1984 by George Orwell
-
-**Non-Fiction** (should return page 1):
-- Sapiens by Yuval Noah Harari
-- The Innovators by Walter Isaacson
-- Thinking, Fast and Slow by Daniel Kahneman
-
-## 📁 Project Structure
+## Project Structure
 
 ```
-book-extraction-ai/
-├── src/
-│   ├── services/
-│   │   ├── bookValidation.ts      # Validate book cover (Claude Vision)
-│   │   ├── bookIdentification.ts  # Extract metadata (Claude Vision + JSON)
-│   │   ├── bookData.ts            # Google Books API + Claude Haiku classification
-│   │   └── textExtraction.ts      # Extract page (Internet Archive + Claude Text + CoT)
-│   ├── anthropic.ts               # Shared Anthropic client
-│   ├── helpers.ts                 # Safe response content extraction
-│   ├── pipeline.ts                # Shared pipeline orchestration
-│   ├── types.ts                   # TypeScript interfaces
-│   ├── logger.ts                  # Pino logger
-│   ├── index.ts                   # Express server
-│   ├── cli.ts                     # CLI interface
-│   └── eval.ts                    # Test suite
-├── public/
-│   └── index.html                 # Frontend (single file, no build step)
-├── package.json
-├── tsconfig.json
-└── .env.example
+src/
+├── services/
+│   ├── bookValidation.ts      # Claude Vision: is this a book cover?
+│   ├── bookIdentification.ts  # Claude Vision: extract title/author/ISBN
+│   ├── bookData.ts            # Google Books + Claude Haiku: genre classification
+│   └── textExtraction.ts      # Internet Archive + Claude Text: page extraction
+├── pipeline.ts                # Shared 4-step orchestration
+├── anthropic.ts               # Single shared Anthropic client
+├── helpers.ts                 # extractTextContent() safe response helper
+├── types.ts                   # TypeScript interfaces
+├── index.ts                   # Express server
+├── cli.ts                     # CLI interface
+├── eval.ts                    # 29 unit tests for parsing logic
+└── integration.ts             # End-to-end tests on real images
 ```
 
-**Total**: ~700 lines of code
+## Testing
 
-## 🎨 Design Principles
+**`npm run eval`** — 29 offline tests covering:
+- JSON parsing with fallbacks (clean JSON, markdown-wrapped, preamble text)
+- Input sanitization (ISBN normalization, whitespace, confidence defaults)
+- Validation response parsing (case-insensitive, missing fields, multi-line)
+- Google Books response parsing (standard, missing fields, empty results)
+- Safe content extraction (valid, empty, mixed block types)
+- Page extraction delimiter handling (well-formed, missing delimiter, scene breaks)
 
-### What This Project Does Well
+**`npm run integration`** — Runs both test images through the full pipeline and validates: correct genre classification, correct page number, sufficient text length, complete response structure.
 
-✅ **Minimal & Clean**
-- Compact codebase, no unnecessary abstractions
-- 9 npm packages (only what's needed)
-- Shared client and helpers to avoid duplication
+## Cost Per Request
 
-✅ **Functional, Not OOP**
-- Pure functions, no classes
-- Direct input → output flow
-- Easy to read and understand
+| Step | Model | Cost |
+|------|-------|------|
+| Validate | Sonnet 4.5 | ~$0.005 |
+| Identify | Sonnet 4.5 | ~$0.005 |
+| Classify | Haiku | ~$0.0002 |
+| Extract | Sonnet 4.5 | ~$0.01 |
+| **Total** | | **~$0.02/request** |
 
-✅ **Sophisticated Prompting**
-- Multiple AI techniques demonstrated
-- Well-commented prompts showing strategy
-- Production-ready error handling
+## API
 
-✅ **Modern Stack (2026)**
-- TypeScript for type safety
-- Async/await throughout
-- Claude Sonnet 4.5 (SOTA vision model)
-- Claude Haiku for cost-efficient classification
+**POST /api/extract** — Upload a book cover image, returns extracted page text.
 
-### What This Project Avoids
-
-❌ No over-engineering (factories, builders, repositories)
-❌ No bloated dependencies (no ORM, no logging framework)
-❌ No premature optimization (stateless, no caching)
-❌ No generic "AI slop" code (every prompt is deliberate)
-
-## 🧪 API Documentation
-
-### POST /api/extract
-
-Upload a book cover image and extract text.
-
-**Request**:
 ```bash
-curl -X POST http://localhost:3000/api/extract \
-  -F "image=@book-cover.jpg"
+curl -X POST http://localhost:3000/api/extract -F "image=@cover.jpg"
 ```
 
-**Response**:
 ```json
 {
   "book": {
-    "title": "The Great Gatsby",
-    "author": "F. Scott Fitzgerald",
+    "title": "The Casebook of Sherlock Holmes",
+    "author": "Arthur Conan Doyle",
     "genre": "Fiction",
-    "categories": ["Fiction", "Classics", "American Literature"]
+    "categories": ["Fiction", "Mystery & Detective"]
   },
   "page": {
     "number": 2,
-    "text": "In my younger and more vulnerable years..."
+    "text": "I fear that Mr. Sherlock Holmes may become like one of those..."
   },
   "debug": {
     "confidence": "high",
-    "reasoning": "Front matter ends at page 5. Chapter 1 begins on page 7..."
+    "reasoning": "Front matter includes title page and contents. Chapter I begins..."
   }
 }
 ```
 
-**Error Response**:
-```json
-{
-  "error": "Invalid book cover",
-  "message": "Image is blurry. Please retake with better lighting."
-}
-```
+**GET /api/health** — Returns `{ "status": "ok" }`.
 
-### GET /api/health
+## What I'd Do Next
 
-Health check endpoint.
-
-## 🔬 How It Works: Technical Deep Dive
-
-### Step 1: Validation (Claude Vision)
-
-```typescript
-// Prompt Engineering: Role-based + Structured Output
-const prompt = `You are a book cover validator.
-Task: Is this a clear photo of a SINGLE book cover?
-
-Respond: VERDICT: [YES or NO]
-REASON: [User-facing explanation]`;
-```
-
-**Why this works**:
-- Explicit role definition
-- Structured output format for reliable parsing
-- User-facing error messages generated by AI
-
-### Step 2: Identification (Claude Vision + JSON Schema)
-
-```typescript
-// Prompt Engineering: JSON Schema Enforcement + Confidence
-const schema = {
-  title: "Full title exactly as shown",
-  author: "Primary author name",
-  isbn: "ISBN if visible, else null",
-  confidence: "high|medium|low"  // AI self-assessment
-};
-```
-
-**Why this works**:
-- Explicit schema teaches AI the exact format
-- Confidence scoring for uncertainty handling
-- Defensive parsing with multiple fallbacks
-
-### Step 3: Metadata + Classification (Google Books + Claude Haiku)
-
-```typescript
-// Google Books for metadata
-const searchUrl = `googleapis.com/books/v1/volumes?q=intitle:${title}+inauthor:${author}`;
-
-// Claude Haiku for classification (~$0.0002/call)
-const prompt = `Is this book fiction or non-fiction?
-Title: "${title}", Author: ${author}, Categories: ${categories}
-Reply: FICTION or NONFICTION`;
-```
-
-**Why this works**:
-- Google Books provides structured categories
-- Claude Haiku handles all genres (horror, drama, satire, literary fiction)
-- Falls back gracefully when no categories available (Haiku knows most books)
-- ~$0.0002/call, <1s latency
-
-### Step 4: Text Extraction (Internet Archive + Claude Text + Chain-of-Thought)
-
-```typescript
-// Prompt Engineering: Chain-of-Thought Reasoning
-const prompt = `THINK STEP-BY-STEP:
-1. Identify front matter (title, copyright, TOC...)
-2. Find where main content begins
-3. Extract page ${isFiction ? 2 : 1} of actual content
-4. Verify substantial text
-
-Return: REASONING: [...] --- PAGE_TEXT: [...]`;
-```
-
-**Why this works**:
-- CoT prompting increases accuracy for complex tasks
-- Structured multi-section output (reasoning + text)
-- Context-aware (fiction vs non-fiction)
-- Validates output (word count, format)
-
-## 🎓 What This Demonstrates
-
-For an **AI Engineering role**, this project showcases:
-
-1. **Prompt Engineering Mastery**
-   - Structured output, chain-of-thought, role-based prompting
-   - Confidence scoring and self-assessment
-   - Edge case handling in prompts
-
-2. **AI Orchestration**
-   - Multi-step pipeline with strategic model selection
-   - Vision models for images, text models for reasoning
-   - Cost-efficient model routing (Haiku for classification, Sonnet for complex tasks)
-
-3. **Production Readiness**
-   - Defensive parsing of probabilistic outputs
-   - Multi-layer fallbacks
-   - Type-safe, validated responses
-   - Meaningful error messages
-
-4. **System Design**
-   - Clean separation of concerns
-   - Minimal dependencies
-   - Easy to understand and modify
-   - Deployable anywhere (Vercel, Railway, Render)
-
-## 📊 Performance
-
-Expected latencies (on typical requests):
-- Validation: ~2s (Claude Vision)
-- Identification: ~2s (Claude Vision)
-- Metadata + Classification: ~1s (Google Books + Claude Haiku)
-- Extraction: ~3-4s (Internet Archive + Claude Text)
-
-**Total**: ~8-10 seconds ✅
-
-## 🚀 Deployment
-
-### Vercel (Recommended)
-
-```bash
-npm install -g vercel
-vercel --prod
-```
-
-Set `ANTHROPIC_API_KEY` in Vercel dashboard environment variables.
-
-### Alternative Platforms
-
-- **Railway**: `railway up`
-- **Render**: Connect GitHub repo, auto-deploy
-- **Fly.io**: `fly launch`
-
-All work with zero configuration.
-
-## 🔮 Future Enhancements
-
-Potential improvements (not in current scope):
-
-- **Multi-API fallback chain**: Google Books → OpenLibrary → Internet Archive
-- **Batch processing**: Upload multiple covers at once
-- **User feedback loop**: Improve accuracy with corrections
-- **Cost optimization**: Cache book lookups, use cheaper models for simple tasks
-- **Observability**: Token usage tracking, latency metrics, success rates
-- **Local models**: Llama 3.2 Vision via Ollama for free inference
-
-## 🤝 Interview Discussion Points
-
-This implementation sets up excellent talking points:
-
-1. **"How would you reduce costs?"**
-   - Cache book metadata in Redis
-   - Already using Haiku for classification (~$0.0002/call)
-   - Batch processing to amortize API calls
-
-2. **"How would you improve accuracy?"**
-   - Few-shot examples in prompts
-   - User confirmation step for low-confidence IDs
-   - Ensemble approach (multiple models vote)
-
-3. **"How would you scale this?"**
-   - Queue system (Bull/BullMQ)
-   - Async processing with webhooks
-   - Rate limiting and backpressure
-
-4. **"What about open-source models?"**
-   - Yes! Llama 3.2 Vision via Ollama
-   - Trade-offs: latency vs cost vs accuracy
-   - Could run locally for free
-
-## 📝 License
-
-MIT
-
-## 🙏 Acknowledgments
-
-- **Anthropic** for Claude Sonnet 4.5 and Claude Haiku (best-in-class AI models)
-- **Google Books** for free metadata API
-- **Internet Archive** for free access to millions of digitized books
-- Built as a take-home assignment demonstrating AI engineering competency
+- **Caching**: Redis layer for Google Books + Internet Archive lookups (most books are looked up repeatedly)
+- **Confidence routing**: Low-confidence identifications → ask user to confirm before proceeding
+- **Streaming**: Stream extraction step progress to the frontend via SSE
+- **Observability**: Token usage tracking per step, latency percentiles, success/failure rates
+- **Fallback chain**: Google Books → OpenLibrary → Internet Archive metadata for better coverage
