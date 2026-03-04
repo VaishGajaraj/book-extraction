@@ -38,7 +38,10 @@ app.post('/api/extract', upload.single('image'), async (req, res) => {
     }
 
     const imageBase64 = req.file.buffer.toString('base64');
-    const result = await runPipeline(imageBase64, req.file.mimetype);
+    const result = await runPipeline(imageBase64, req.file.mimetype, {
+      onStep: (step, msg) => logger.info(`Step ${step}: ${msg}`),
+      onDetail: (info) => logger.info(info),
+    });
     return res.json(result);
 
   } catch (error: any) {

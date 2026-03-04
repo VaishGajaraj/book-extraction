@@ -1,4 +1,3 @@
-import logger from './logger';
 import { PipelineResult } from './types';
 import { validateBookCover } from './services/bookValidation';
 import { identifyBook } from './services/bookIdentification';
@@ -12,24 +11,36 @@ export class PipelineValidationError extends Error {
   }
 }
 
-export async function runPipeline(imageBase64: string, mediaType: string): Promise<PipelineResult> {
-  logger.info('Step 1: Validating book cover...');
+export interface PipelineCallbacks {
+  onStep?: (step: number, message: string) => void;
+  onDetail?: (detail: Record<string, any>) => void;
+}
+
+export async function runPipeline(
+  imageBase64: string,
+  mediaType: string,
+  callbacks?: PipelineCallbacks
+): Promise<PipelineResult> {
+  const log = callbacks?.onStep ?? (() => {});
+  const detail = callbacks?.onDetail ?? (() => {});
+
+  log(1, 'Validating book cover...');
   const validation = await validateBookCover(imageBase64, mediaType);
   if (!validation.isValid) {
     throw new PipelineValidationError(validation.message);
   }
 
-  logger.info('Step 2: Identifying book...');
+  log(2, 'Identifying book...');
   const bookInfo = await identifyBook(imageBase64, mediaType);
-  logger.info({ title: bookInfo.title, author: bookInfo.author, confidence: bookInfo.confidence }, 'Book identified');
+  detail({ title: bookInfo.title, author: bookInfo.author, confidence: bookInfo.confidence });
 
-  logger.info('Step 3: Fetching metadata...');
+  log(3, 'Fetching metadata...');
   const metadata = await fetchBookData(bookInfo.title, bookInfo.author);
-  logger.info({ genre: metadata.isFiction ? 'Fiction' : 'Non-Fiction' }, 'Metadata fetched');
+  detail({ genre: metadata.isFiction ? 'Fiction' : 'Non-Fiction' });
 
-  logger.info('Step 4: Extracting page text...');
+  log(4, 'Extracting page text...');
   const extraction = await extractBookText(bookInfo, metadata.isFiction);
-  logger.info({ page: extraction.pageNumber, words: extraction.pageText.split(/\s+/).length }, 'Page extracted');
+  detail({ page: extraction.pageNumber, words: extraction.pageText.split(/\s+/).length });
 
   return {
     book: {
